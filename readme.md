@@ -30,6 +30,16 @@
 
 
 
+- 修改人：*Liu-Jiahao*
+- 时间： 2023-6-8
+- 修改内容：
+  - 增加 **mySocket** 类 和 **myPing** 类，书写相关函数
+  - 解决 k210 与 windows ping不同的情况
+    - 将网关设置为与windows相同即可
+  - 成功实现 k210、windows、树莓派的局域网搭建，并且互 ping 成功
+
+
+
 ## 五、仓库地址
 
 - GitHub: [Jiahao-Liu29/W5500_Get (github.com)](https://github.com/Jiahao-Liu29/W5500_Get)
