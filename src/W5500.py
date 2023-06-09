@@ -290,7 +290,10 @@ class w5500(spiChat):
         :param socket_num:
         :return:
         '''
-        global  val
+        global val
+        global val1
+        val = 0
+        val1 = 0
         while True:
             val1 = self.IINCHIP_READ(self.SN_RX_RSR0(socket_num))
             val1 = (val1 << 8) + self.IINCHIP_READ(self.SN_RX_RSR1(socket_num))
@@ -298,7 +301,6 @@ class w5500(spiChat):
                 val = self.IINCHIP_READ(self.SN_RX_RSR0(socket_num))
                 val = (val << 8) + self.IINCHIP_READ(self.SN_RX_RSR1(socket_num))
             if val != val1: break
-
         return val
 
     def send_data_processing(self, socket_num, buf):
@@ -325,7 +327,7 @@ class w5500(spiChat):
 
 
 ''' socket 类 '''
-class mysocket(spiChat, w5500):
+class mysocket(w5500):
     def __init__(self,local_port=5000, TINCHIP_DBG=False):
         super().__init__()
         self.local_port = local_port
@@ -376,6 +378,30 @@ class mysocket(spiChat, w5500):
 
         return data
 
+    def checkNum(self, buf):
+        '''
+        计算字符串校验值
+        :param buf:
+        :return:
+        '''
+        j = len(buf) >> 1
+
+        global tsum
+        global lsum
+        tsum = 0
+        lsum = 0
+        for i in range(j):
+            tsum = buf[i * 2]
+            tsum = tsum << 8
+            tsum += buf[i * 2 + 1]
+            lsum += tsum
+        if len(buf) % 2:
+            tsum = buf[j * 2]
+            lsum += tsum << 8
+        sum = lsum
+        sum = ~(sum + (lsum >> 16))
+        return sum
+
     def socket(self, socket_num, protocol, port, flag):
         '''
         此Socket函数在特定模式下初始化通道，并设置端口并等待W5200完成。
@@ -411,7 +437,7 @@ class mysocket(spiChat, w5500):
         :param socket_num:
         :return:
         '''
-        self.__IINCHIP_WRITE(self.SN_SR(socket_num), self.Sn_CR_CLOSE)
+        self.__IINCHIP_WRITE(self.SN_SR(socket_num), self.SN_CR_CLOSE)
         while (self.__IINCHIP_READ(self.SN_SR(socket_num))):  break
         self.__IINCHIP_WRITE(self.SN_SR(socket_num), 0xFF)    # clear
 
@@ -439,6 +465,7 @@ class mysocket(spiChat, w5500):
 
     def sendto(self, socket_num, buf, addr, port):
         global ret
+        ret = 0
         if len(buf) > self.getIINCHIP_TxMAX(socket_num):
             ret = self.getIINCHIP_TxMAX(socket_num)
         else:   ret = len(buf)
@@ -461,7 +488,7 @@ class mysocket(spiChat, w5500):
                 if self.IINCHIP_READ(self.SN_IR(socket_num)) & self.SN_IR_TIMEOUT:
                     self.IINCHIP_WRITE(self.SN_IR(socket_num), (self.SN_IR_SEND_OK | self.SN_IR_TIMEOUT))
                     return 0
-                self.IINCHIP_WRITE(self.SN_IR(socket_num), self.SN_IR_SEND_OK)
+            self.IINCHIP_WRITE(self.SN_IR(socket_num), self.SN_IR_SEND_OK)
 
         return ret
 
@@ -475,10 +502,10 @@ class mysocket(spiChat, w5500):
         :param port:
         :return:
         '''
-        buf = bytearray(133)
-        datalen = 0
         global buf
         global datalen
+        datalen = 0
+        buf = bytearray(133)
         if length > 0:
             ptr = self.IINCHIP_READ(self.SN_RX_RD0(socket_num))
             ptr = ((ptr & 0x00ff) << 8) + self.IINCHIP_READ(self.SN_RX_RD1(socket_num))
@@ -541,7 +568,7 @@ class mysocket(spiChat, w5500):
         return self.SSIZE[socket_num]
 
 
-class myPing(w5500,mysocket):
+class myPing(mysocket):
     def __init__(self):
         super().__init__()
         self.pingType = 8
@@ -551,7 +578,13 @@ class myPing(w5500,mysocket):
         self.pingSeqNum = 0x4321
         self.BUF_LEN = 128
 
+        self.req = 0
+        self.rep = 0
+
         self.PING_REPLY = 0
+        self.PING_REQUEST = 8
+
+        self.ping_reply_received = False
 
     def __swaps(self, data):
         '''
@@ -560,9 +593,11 @@ class myPing(w5500,mysocket):
         :return:
         '''
         ret = struct.pack('<H', data)
-        return (ret[0] << 8 | ret[1])
+        return (ret)
 
     def pingCmd(self, socket_num, addr):
+        global cnt
+        cnt = 0
         for i in range(5):  # ping 5次
             time.sleep_ms(10)
             SOCK_STATE = self.getSn_SR(socket_num)
@@ -575,27 +610,48 @@ class myPing(w5500,mysocket):
                 time.sleep_ms(2)
             elif SOCK_STATE == self.SOCK_IPRAW:
                 self.ping_request(socket_num, addr)
-                # TODO [req++]
+                self.req += 1
                 while True:
                     rlen = self.getSN_RX_RSR(socket_num)
                     if rlen > 0:
-                        # TODO [ping reply]
-                        pass
+                        self.ping_reply(socket_num, addr, rlen)
+                        time.sleep_us(500)
+                        self.rep += 1
+                        break
+                    elif cnt > 200:
+                        print("Request Time out.")
+                        cnt = 0
+                        break
+                    else:
+                        cnt += 1
+                        time.sleep_ms(1)
+            else:
+                print("socket_state Error!")
+            if self.rep != 0:
+                print("Ping Request = %d, PING_Reply = %d"% (self.req, self.rep))
+                if self.rep == self.req:
+                    print("PING SUCCESS")
+                else:
+                    print("REPLY_ERROR")
 
-    # TODO [pint_request 函数]
     def ping_request(self, socket_num, addr):
-        buf = bytearray(133)
-        for i in range(self.BUF_LEN):
-            buf[i+5] = i % 8
+        buf = bytearray(136)
 
         buf[0] = self.pingType
         buf[1] = self.pingCode
-        buf[2] = self.__swaps(self.pingID + 1)
-        buf[3] = self.__swaps(self.pingSeqNum + 1)
-        self.pingCheckNum = 0
+        buf[2] = 0x00
+        buf[2] = 0x00
+        buf[4] = self.__swaps(self.pingID + 1)[0]
+        buf[5] = self.__swaps(self.pingID + 1)[1]
+        buf[6] = self.__swaps(self.pingSeqNum + 1)[0]
+        buf[7] = self.__swaps(self.pingSeqNum + 1)[1]
+
+        for i in range(self.BUF_LEN):
+            buf[i+8] = i % 8
+
         ''' 计算响应次数 '''
-        # TODO [pingCheck Num]
-        # self.pingCheckNum =
+        buf[2] = self.__swaps(self.checkNum(buf))[0]
+        buf[3] = self.__swaps(self.checkNum(buf))[1]
         if self.sendto(socket_num, buf, addr, 3000) == 0:
             print("Fail to send ping-reply packet")
         else:
@@ -603,13 +659,39 @@ class myPing(w5500,mysocket):
         return 0
 
     def ping_reply(self, socket_num, addr, rlen):
+        '''
+        解析 Ping 回复
+        :param socket_num:
+        :param addr:
+        :param rlen:
+        :return:
+        '''
         port = 3000
+        global temp_checksum
+        temp_checksum = 0
         PingReplay = bytearray(136)
         length = self.recvfrom(socket_num, rlen, addr, port)[0]
         databuf = self.recvfrom(socket_num, rlen, addr, port)[1]
         if databuf[0] == self.PING_REPLY:
             PingReplay[0: ] = databuf[0: ]
-            # TODO [checknum 函数] 检查 ping 的次数
+            temp_checksum = ~self.checkNum(databuf)
+            if temp_checksum != 0xffff:
+                print("tmp_checksum = %d" % temp_checksum)
+            else:
+                print("来自 %d.%d.%d.%d 的回复 ：ID=%x 字节=%d" %
+                       (addr[0], addr[1], addr[2], addr[3],
+                        (self.__swaps(PingReplay[5] << 8 + PingReplay[4])[0] << 8 +
+                         self.__swaps(PingReplay[5] << 8 + PingReplay[4])[1]), (rlen + 6)))
+                self.ping_reply_received = True
+        elif databuf[0] == self.PING_REQUEST:
+            PingReplay[0: ] = databuf[0: ]
+            temp_checksum = databuf[3] << 8 + databuf[2]
+            print("Request from %d.%d.%d.%d  ID:%x SeqNum:%x  :data size %d bytes" %
+                  (addr[0], addr[1], addr[2], addr[3],
+                   databuf[5] << 8 + databuf[4], databuf[7] << 8 + databuf[6], (rlen + 6)))
+            self.ping_reply_received = True
+        else:
+            print("Unkonwn msg.")
 
 
 
@@ -617,10 +699,11 @@ if __name__ == '__main__':
     mac = bytearray([0x00,0x08,0xdc,0x11,0x11,0x11])    # mac 地址
     subnet = bytearray([255,255,255,0])                 # 子网掩码
     gateway = bytearray([192,168,5,1])                  # 网关
-    local_ip = bytearray([192,168,5,1])                 # ip地址
+    local_ip = bytearray([192,168,5,3])                 # ip地址
 
     myW5500 = w5500()
     SOCKET = mysocket()
+    myping = myPing()
 
     myW5500.reset_w5500()
     myW5500.W5500_setMac(mac)
@@ -630,6 +713,8 @@ if __name__ == '__main__':
     SOCKET.socketBuf_Init()
 
     while True:
+        print("------正在执行ping-----")
+        myping.pingCmd(0, bytearray([192,168,5,10]))
+        time.sleep_ms(1000)
         pass
-
 
