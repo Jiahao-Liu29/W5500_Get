@@ -24,7 +24,7 @@ class w5500(spiChat):
         self.SIPR0 = 0x000F00
         self.GAR0  = 0x000100
 
-        self.SOCKET_CLOSE = 0x00    # closed
+        self.SOCKET_CLOSED = 0x00    # closed
         self.SOCK_IPRAW = 0x32      # ip raw mode socket
 
         self.SN_IR_SEND_OK = 0x10   # complete sending
@@ -65,7 +65,7 @@ class w5500(spiChat):
         return (0x000408 + (ch << 5))
     @staticmethod
     def SN_PORT1(ch):
-        return (0x000508 + (ch<<5))
+        return (0x000508 + (ch << 5))
 
     ''' 对等IP寄存器地址 '''
     @staticmethod
@@ -120,7 +120,6 @@ class w5500(spiChat):
         :param buf:
         :return:
         '''
-        if len(buf) == 0:    print("write datalen Error!")
         self.cs.value(0)
         self.spi.write((addr & 0x00FF0000) >> 16)
         self.spi.write((addr & 0x0000FF00) >> 8)
@@ -213,7 +212,7 @@ class w5500(spiChat):
         :param addr:
         :return: byte
         '''
-        return (self.__wiz_readBuff(self.SN_SR(addr), 1)[0])
+        return (self.IINCHIP_READ(self.SN_SR(addr)))
 
     def IINCHIP_WRITE(self, addr, data):
         '''
@@ -222,7 +221,7 @@ class w5500(spiChat):
         :param data:
         :return:
         '''
-        self.__wiz_writeBuff(addr, bytearray([data]))
+        self.__wiz_writeBuff(addr, data)
 
     def IINCHIP_READ(self, addr):
         '''
@@ -290,8 +289,7 @@ class w5500(spiChat):
         :param socket_num:
         :return:
         '''
-        global val
-        global val1
+        global val, val1
         val = 0
         val1 = 0
         while True:
@@ -300,7 +298,8 @@ class w5500(spiChat):
             if val1 != 0:
                 val = self.IINCHIP_READ(self.SN_RX_RSR0(socket_num))
                 val = (val << 8) + self.IINCHIP_READ(self.SN_RX_RSR1(socket_num))
-            if val != val1: break
+            if val == val1:
+                break
         return val
 
     def send_data_processing(self, socket_num, buf):
@@ -333,10 +332,10 @@ class mysocket(w5500):
         self.local_port = local_port
         self.MAX_SOCK_NUM = 8
         self.MAX_SOCK_SIZE = 16384
-        self.SSIZE = bytearray([0,0,0,0,0,0,0,0])
-        self.RSIZE = bytearray([0,0,0,0,0,0,0,0])
-        self.txsize = bytearray([2,2,2,2,2,2,2,2])
-        self.rxsize = bytearray([2,2,2,2,2,2,2,2])
+        self.SSIZE = [0] * self.MAX_SOCK_NUM
+        self.RSIZE = [0] * self.MAX_SOCK_NUM
+        self.txsize = [2,2,2,2,2,2,2,2]
+        self.rxsize = [2,2,2,2,2,2,2,2]
 
         self.TINCHIP_DBG = TINCHIP_DBG
 
@@ -376,7 +375,7 @@ class mysocket(w5500):
         self.spi.readinto(data, write=0x00)
         self.cs.value(1)
 
-        return data
+        return data[0]
 
     def checkNum(self, buf):
         '''
@@ -384,12 +383,13 @@ class mysocket(w5500):
         :param buf:
         :return:
         '''
-        j = len(buf) >> 1
-
         global tsum
         global lsum
         tsum = 0
         lsum = 0
+
+        j = len(buf) >> 1
+
         for i in range(j):
             tsum = buf[i * 2]
             tsum = tsum << 8
@@ -411,11 +411,13 @@ class mysocket(w5500):
         :param flag: Set some bit of MR,such as **< No Delayed Ack(TCP) flag.
         :return: 1 for success else 0.
         '''
-        if (protocol&0x0f) == self.SN_MR_TCP or \
-                (protocol & 0x0f) == self.SN_MR_UDP or \
-                (protocol & 0x0f) == self.SN_MR_IPRAW or \
-                (protocol & 0x0f) == self.SN_MR_MACRAW or \
-                (protocol & 0x0f) == self.SN_MR_PPPOE:
+        if (
+            ((protocol&0x0f) == self.SN_MR_TCP) or
+            ((protocol & 0x0f) == self.SN_MR_UDP) or
+            ((protocol & 0x0f) == self.SN_MR_IPRAW) or
+            ((protocol & 0x0f) == self.SN_MR_MACRAW) or
+            ((protocol & 0x0f) == self.SN_MR_PPPOE)
+        ):
             self.close(socket_num)  # 关闭
             self.IINCHIP_WRITE(self.SN_MR(socket_num), protocol | flag)
             if port != 0:
@@ -426,7 +428,8 @@ class mysocket(w5500):
                 self.IINCHIP_WRITE(self.SN_PORT0(socket_num), ((self.local_port & 0xff00) >> 8))
                 self.IINCHIP_WRITE(self.SN_PORT1(socket_num), (self.local_port & 0x00ff))
             self.IINCHIP_WRITE(self.SN_CR(socket_num), self.SN_CR_OPEN)
-            while (self.IINCHIP_READ(self.SN_CR(socket_num)), self.SN_CR_OPEN): break
+            while (self.IINCHIP_READ(self.SN_CR(socket_num))):
+                pass
             return 1
         else:
             return 0
@@ -437,9 +440,10 @@ class mysocket(w5500):
         :param socket_num:
         :return:
         '''
-        self.__IINCHIP_WRITE(self.SN_SR(socket_num), self.SN_CR_CLOSE)
-        while (self.__IINCHIP_READ(self.SN_SR(socket_num))):  break
-        self.__IINCHIP_WRITE(self.SN_SR(socket_num), 0xFF)    # clear
+        self.__IINCHIP_WRITE(self.SN_CR(socket_num), self.SN_CR_CLOSE)
+        while (self.__IINCHIP_READ(self.SN_CR(socket_num))):
+            pass
+        self.__IINCHIP_WRITE(self.SN_IR(socket_num), 0xFF)    # clear
 
     def socketBuf_Init(self):
         '''
@@ -479,11 +483,12 @@ class mysocket(w5500):
             self.IINCHIP_WRITE(self.SN_DIPR2(socket_num), addr[2])
             self.IINCHIP_WRITE(self.SN_DIPR3(socket_num), addr[3])
             self.IINCHIP_WRITE(self.SN_DPORT0(socket_num), ((port & 0xff00) >> 8))
-            self.IINCHIP_WRITE(self.SN_DPORT0(socket_num), (port & 0x00ff))
+            self.IINCHIP_WRITE(self.SN_DPORT1(socket_num), (port & 0x00ff))
             # copy data
             self.send_data_processing(socket_num, buf)
             self.IINCHIP_WRITE(self.SN_CR(socket_num), self.SN_CR_SEND)
-            while (self.IINCHIP_READ(self.SN_CR(socket_num))): break
+            while (self.IINCHIP_READ(self.SN_CR(socket_num))):
+                pass
             while ((self.IINCHIP_READ(self.SN_IR(socket_num)) & self.SN_IR_SEND_OK) != self.SN_IR_SEND_OK):
                 if self.IINCHIP_READ(self.SN_IR(socket_num)) & self.SN_IR_TIMEOUT:
                     self.IINCHIP_WRITE(self.SN_IR(socket_num), (self.SN_IR_SEND_OK | self.SN_IR_TIMEOUT))
@@ -506,16 +511,18 @@ class mysocket(w5500):
         global datalen
         datalen = 0
         buf = bytearray(133)
+
         if length > 0:
             ptr = self.IINCHIP_READ(self.SN_RX_RD0(socket_num))
             ptr = ((ptr & 0x00ff) << 8) + self.IINCHIP_READ(self.SN_RX_RD1(socket_num))
             addrbsb = (ptr << 8) + (socket_num << 5) + 0x18
 
-            ret = self.IINCHIP_READ(self.SN_MR(socket_num) & 0x07)
+            ret = self.IINCHIP_READ(self.SN_MR(socket_num)) & 0x07
+
             if ret == self.SN_MR_UDP:
-                head = self.wiz_readBuff(addrbsb, 8)
+                head = self.wiz_readBuff(addrbsb, 0x08)
                 ptr += 8
-                addr[0:3] = head[0:3]   # IP address to receive.
+                addr[0:4] = head[0:4]       # # IP address to receive.
                 port[0] = head[4]
                 port[1] = (port[0] << 8) + head[5]
                 datalen = (head[6] << 8) + head[7]
@@ -527,9 +534,9 @@ class mysocket(w5500):
                 self.IINCHIP_WRITE(self.SN_RX_RD0(socket_num), ((ptr & 0xff00) >> 8))
                 self.IINCHIP_WRITE(self.SN_RX_RD1(socket_num), (ptr & 0x00ff))
             elif ret == self.SN_MR_IPRAW:
-                head = self.wiz_readBuff(addrbsb, 6)
+                head = self.wiz_readBuff(addrbsb, 0x06)
                 ptr += 6
-                addr[0:3] = head[0:3]
+                addr[0:4] = head[0:4]
                 datalen = (head[4] << 8) + head[5]
 
                 addrbsb = (ptr << 8) + (socket_num << 5) + 0x18
@@ -538,13 +545,15 @@ class mysocket(w5500):
 
                 self.IINCHIP_WRITE(self.SN_RX_RD0(socket_num), ((ptr & 0xff00) >> 8))
                 self.IINCHIP_WRITE(self.SN_RX_RD1(socket_num), (ptr & 0x00ff))
+                print("socket Status: SN_MR_IPRAW")
             elif ret == self.SN_MR_MACRAW:
-                head = self.wiz_readBuff(addrbsb, 2)
+                head = self.wiz_readBuff(addrbsb, 0x02)
                 ptr += 2
                 datalen = (head[0] << 8) + head[1] - 2
                 if datalen > 1514:
                     print("data_len over 1514")
-                    while True: pass
+                    while True:
+                        pass
 
                 addrbsb = (ptr << 8) + (socket_num << 5) + 0x18
                 buf = self.wiz_readBuff(addrbsb, datalen)
@@ -552,11 +561,11 @@ class mysocket(w5500):
 
                 self.IINCHIP_WRITE(self.SN_RX_RD0(socket_num), ((ptr & 0xff00) >> 8))
                 self.IINCHIP_WRITE(self.SN_RX_RD1(socket_num), (ptr & 0x00ff))
-            else:
-                print("socket_num erro")
-        self.IINCHIP_WRITE(self.SN_CR(socket_num), self.SN_CR_RECV)
-        while (self.IINCHIP_READ(self.SN_CR(socket_num))): break
+            self.IINCHIP_WRITE(self.SN_CR(socket_num), self.SN_CR_RECV)
+            while (self.IINCHIP_READ(self.SN_CR(socket_num))):
+                pass
 
+        print("Recv Datalen: %d" % datalen)
         return [datalen, buf]
 
     def getIINCHIP_TxMAX(self, socket_num):
@@ -599,14 +608,15 @@ class myPing(mysocket):
         global cnt
         cnt = 0
         for i in range(5):  # ping 5次
-            time.sleep_ms(10)
+            time.sleep_ms(1000)
             SOCK_STATE = self.getSn_SR(socket_num)
-            if SOCK_STATE == self.SOCKET_CLOSE:
+            if SOCK_STATE == self.SOCKET_CLOSED:
                 self.close(socket_num)
                 self.IINCHIP_WRITE(self.SN_PROTO(socket_num), self.IPPROTO_ICMP)    # 设置 ICMP 协议
                 if self.socket(socket_num, self.SN_MR_IPRAW, 3000, 0) != 0:
                     pass
-                while (self.getSn_SR(socket_num) != self.SOCK_IPRAW): return
+                while (self.getSn_SR(socket_num) != self.SOCK_IPRAW):
+                    pass
                 time.sleep_ms(2)
             elif SOCK_STATE == self.SOCK_IPRAW:
                 self.ping_request(socket_num, addr)
@@ -617,8 +627,10 @@ class myPing(mysocket):
                         self.ping_reply(socket_num, addr, rlen)
                         time.sleep_us(500)
                         self.rep += 1
-                        break
-                    elif cnt > 200:
+                        # 回复完成
+                        if self.ping_reply_received:
+                            break
+                    elif cnt > 1000:
                         print("Request Time out.")
                         cnt = 0
                         break
@@ -628,7 +640,7 @@ class myPing(mysocket):
             else:
                 print("socket_state Error!")
             if self.rep != 0:
-                print("Ping Request = %d, PING_Reply = %d"% (self.req, self.rep))
+                print("Ping Request = %d, PING_Reply = %d" % (self.req, self.rep))
                 if self.rep == self.req:
                     print("PING SUCCESS")
                 else:
@@ -637,25 +649,36 @@ class myPing(mysocket):
     def ping_request(self, socket_num, addr):
         buf = bytearray(136)
 
-        buf[0] = self.pingType
-        buf[1] = self.pingCode
-        buf[2] = 0x00
-        buf[2] = 0x00
-        buf[4] = self.__swaps(self.pingID + 1)[0]
-        buf[5] = self.__swaps(self.pingID + 1)[1]
-        buf[6] = self.__swaps(self.pingSeqNum + 1)[0]
-        buf[7] = self.__swaps(self.pingSeqNum + 1)[1]
+        self.ping_reply_received = False
+
+        self.pingID += 1
+        self.pingSeqNum += 1
+
+        buf[0] = self.pingType      # 类型
+        buf[1] = self.pingCode      # 代码
+        buf[2] = 0x00               # 检验和
+        buf[3] = 0x00               # 检验和
+        ''' 这4个字节取决于 ICMP 报文的类型 '''
+        buf[4] = self.__swaps(self.pingID)[0]
+        buf[5] = self.__swaps(self.pingID)[1]
+        buf[6] = self.__swaps(self.pingSeqNum)[0]
+        buf[7] = self.__swaps(self.pingSeqNum)[1]
 
         for i in range(self.BUF_LEN):
             buf[i+8] = i % 8
 
         ''' 计算响应次数 '''
-        buf[2] = self.__swaps(self.checkNum(buf))[0]
-        buf[3] = self.__swaps(self.checkNum(buf))[1]
+        temp = self.checkNum(buf)
+        buf[2] = (temp >> 8) & 0xff
+        buf[3] = temp & 0xff
+        print('Send Data: ', end='')
+        for i in buf:
+            print(hex(i), end= " ")
+        print("")
         if self.sendto(socket_num, buf, addr, 3000) == 0:
             print("Fail to send ping-reply packet")
         else:
-            print("正在 Ping： %d.%d.%d.%d" % (addr[0], addr[1], addr[2], addr[3]))
+            print("\n正在 Ping： %d.%d.%d.%d" % (addr[0], addr[1], addr[2], addr[3]))
         return 0
 
     def ping_reply(self, socket_num, addr, rlen):
@@ -666,29 +689,42 @@ class myPing(mysocket):
         :param rlen:
         :return:
         '''
-        port = 3000
         global temp_checksum
         temp_checksum = 0
-        PingReplay = bytearray(136)
-        length = self.recvfrom(socket_num, rlen, addr, port)[0]
-        databuf = self.recvfrom(socket_num, rlen, addr, port)[1]
-        if databuf[0] == self.PING_REPLY:
-            PingReplay[0: ] = databuf[0: ]
-            temp_checksum = ~self.checkNum(databuf)
+        port = 3000
+
+        ret = self.recvfrom(socket_num, rlen, addr, port)
+        PingReplay = bytearray(ret[0])  # 获取长度
+        databuf = ret[1]                # 获取数据
+
+        ''' 输出数据 '''
+        print("Recv Data: ", end='')
+        for i in databuf:
+            print(hex(i), end=' ')
+        print('')
+        ''' 输出数据 '''
+
+        PingReplay[0:] = databuf[0:]    # 数据拷贝
+        del databuf # 清缓存
+        if PingReplay[0] == self.PING_REPLY:
+            temp_checksum = ~self.checkNum(PingReplay) & 0xffff
+            # 检查 ping 回复次数
             if temp_checksum != 0xffff:
-                print("tmp_checksum = %d" % temp_checksum)
+                print("tmp_checksum = %x" % temp_checksum)
             else:
                 print("来自 %d.%d.%d.%d 的回复 ：ID=%x 字节=%d" %
                        (addr[0], addr[1], addr[2], addr[3],
-                        (self.__swaps(PingReplay[5] << 8 + PingReplay[4])[0] << 8 +
-                         self.__swaps(PingReplay[5] << 8 + PingReplay[4])[1]), (rlen + 6)))
+                        (PingReplay[4] << 8 | PingReplay[5]),
+                        (rlen + 6)))
                 self.ping_reply_received = True
-        elif databuf[0] == self.PING_REQUEST:
-            PingReplay[0: ] = databuf[0: ]
-            temp_checksum = databuf[3] << 8 + databuf[2]
+        elif PingReplay[0] == self.PING_REQUEST:
+            temp_checksum = PingReplay[3] << 8 + PingReplay[2]
+            # TODO [此处与原函数有区别，后续开发注意]
             print("Request from %d.%d.%d.%d  ID:%x SeqNum:%x  :data size %d bytes" %
                   (addr[0], addr[1], addr[2], addr[3],
-                   databuf[5] << 8 + databuf[4], databuf[7] << 8 + databuf[6], (rlen + 6)))
+                   PingReplay[4] << 8 | PingReplay[5],
+                   PingReplay[6] << 8 | PingReplay[7],
+                   (rlen + 6)))
             self.ping_reply_received = True
         else:
             print("Unkonwn msg.")
@@ -699,22 +735,22 @@ if __name__ == '__main__':
     mac = bytearray([0x00,0x08,0xdc,0x11,0x11,0x11])    # mac 地址
     subnet = bytearray([255,255,255,0])                 # 子网掩码
     gateway = bytearray([192,168,5,1])                  # 网关
-    local_ip = bytearray([192,168,5,3])                 # ip地址
+    local_ip = bytearray([192,168,5,5])                 # ip地址
 
-    myW5500 = w5500()
-    SOCKET = mysocket()
+    # myW5500 = w5500()
+    # SOCKET = mysocket(TINCHIP_DBG=True)
     myping = myPing()
 
-    myW5500.reset_w5500()
-    myW5500.W5500_setMac(mac)
-    myW5500.W5500_setIP(subnet, gateway, local_ip)
-    myW5500.W5500_getIP()
+    myping.reset_w5500()
+    myping.W5500_setMac(mac)
+    myping.W5500_setIP(subnet, gateway, local_ip)
+    myping.W5500_getIP()
 
-    SOCKET.socketBuf_Init()
+    myping.socketBuf_Init()
 
     while True:
         print("------正在执行ping-----")
-        myping.pingCmd(0, bytearray([192,168,5,10]))
-        time.sleep_ms(1000)
+        time.sleep_ms(2000)
+        myping.pingCmd(0, bytearray([192, 168, 5, 20]))
         pass
 

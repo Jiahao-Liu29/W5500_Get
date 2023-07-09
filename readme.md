@@ -50,6 +50,14 @@
 
 
 
+- 修改人：*Liu-Jiahao*
+- 时间：2023-7-9
+- 修改内容：
+  - 完善代码中存在的 bug
+  - 完美解决 w5500 ping 主机的问题
+
+
+
 ## 五、仓库地址
 
 - GitHub: [Jiahao-Liu29/W5500_Get (github.com)](https://github.com/Jiahao-Liu29/W5500_Get)
