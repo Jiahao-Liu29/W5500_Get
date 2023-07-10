@@ -3,14 +3,15 @@ from fpioa_manager import fm
 from Maix import GPIO
 import time
 import struct
+import sensor, image
 
 ''' SPI 类 '''
 class spiChat():
     def __init__(self, baudrate=10000000):
         fm.register(27, fm.fpioa.GPIOHS10, force=True)  # cs
         self.cs = GPIO(GPIO.GPIOHS10, GPIO.OUT)    # cs 脚
+        self.cs.value(1)
         self.spi = SPI(SPI.SPI1, mode=SPI.MODE_MASTER, baudrate=baudrate, polarity=0, phase=0, bits=8, firstbit=SPI.MSB, sck=28, mosi=29, miso=30)
-
 
 ''' W5500类 '''
 class w5500(spiChat):
@@ -18,25 +19,44 @@ class w5500(spiChat):
         super().__init__()
         fm.register(31, fm.fpioa.GPIOHS11, force=True)  # reset
         self.reset = GPIO(GPIO.GPIOHS11, GPIO.OUT)  # reset 脚
+        self.reset.value(1)
 
         self.SHAR0 = 0x000900
         self.SUBR0 = 0x000500
         self.SIPR0 = 0x000F00
         self.GAR0  = 0x000100
 
+        ''' socket 端口选择 '''
+        self.SOCK_TCPS = 0
+        self.SOCK_TCPC = 1
+
         self.SOCKET_CLOSED = 0x00    # closed
         self.SOCK_IPRAW = 0x32      # ip raw mode socket
 
+        ''' SN_SR values '''
+        self.SOCK_CLOSED = 0x00     # closed
+        self.SOCK_INIT = 0x13       # init state
+        self.SOCK_SYNSENT = 0x15    # connection state
+        self.SOCK_ESTABLISHED = 0x17# success to connect
+        self.SOCK_CLOSE_WAIT = 0x1C # closing state
+
+        ''' SN_IR value '''
         self.SN_IR_SEND_OK = 0x10   # complete sending
         self.SN_IR_TIMEOUT = 0x08   # assert timeout
+        self.SN_IR_CON  = 0x01      # established connection
 
+        ''' SN_MR values '''
         self.SN_MR_TCP = 0x01       # tcp
         self.SN_MR_UDP = 0x02       # udp
         self.SN_MR_IPRAW = 0x03     # IP LAYER RAW SOCK
         self.SN_MR_MACRAW = 0x04    # MAC LAYER RAW SOCK
         self.SN_MR_PPPOE = 0x05     # PPPoE
+        self.SN_MR_ND = 0x20
 
+        ''' SN_CR values '''
         self.SN_CR_OPEN = 0x01      # initialize or open socket
+        self.SN_CR_LISTEN = 0x02    # wait connection request in tcp mode(Server mode)
+        self.SN_CR_CONNECT = 0x04  # send connection request in tcp mode(Client mode)
         self.SN_CR_CLOSE = 0x10     # close socket
         self.SN_CR_SEND = 0x20      # update txbuf pointer, send data
         self.SN_CR_RECV = 0x40      # update rxbuf pointer, recv data
@@ -96,6 +116,14 @@ class w5500(spiChat):
     @staticmethod
     def SN_TX_WR1(ch):
         return (0x002508 + (ch << 5))
+
+    ''' 传输可用内存大小寄存器 '''
+    @staticmethod
+    def SN_TX_FSR0(ch):
+        return (0x002008 + (ch << 5))
+    @staticmethod
+    def SN_TX_FSR1(ch):
+        return (0x002108 + (ch << 5))
 
     ''' 接收数据大小寄存器 '''
     @staticmethod
@@ -189,6 +217,7 @@ class w5500(spiChat):
         '''
         local_ip = self.__wiz_readBuff(self.SIPR0, 4)
         print("W5500 IP地址： %d.%d.%d.%d" % (local_ip[0], local_ip[1], local_ip[2], local_ip[3]))
+        return local_ip
 
     def __getSUBR(self):
         '''
@@ -213,6 +242,14 @@ class w5500(spiChat):
         :return: byte
         '''
         return (self.IINCHIP_READ(self.SN_SR(addr)))
+
+    def __getSn_IR(self, addr):
+        '''
+        此功能用于读取中断和 SOCKET 状态寄存器
+        :param socket_num:
+        :return:
+        '''
+        return (self.IINCHIP_READ(self.SN_IR(addr)))
 
     def IINCHIP_WRITE(self, addr, data):
         '''
@@ -248,6 +285,22 @@ class w5500(spiChat):
         '''
         return (self.__getSn_SR(addr))
 
+    def getSn_IR(self, addr):
+        '''
+        对外提供函数
+        :param addr:
+        :return:
+        '''
+        return (self.__getSn_IR(addr))
+
+    def setSn_IR(self, addr, val):
+        '''
+        此功能用于读取中断和 SOCKET 状态寄存器
+        :param addr:
+        :return:
+        '''
+        return (self.IINCHIP_WRITE(self.SN_IR(addr), val))
+
     def reset_w5500(self):
         '''
         复位操作
@@ -279,9 +332,29 @@ class w5500(spiChat):
         self.__setSIPR(lip)     # 设置本地ip
 
     def W5500_getIP(self):
-        self.__getSIPR()        # 获取ip
+        ip = self.__getSIPR()        # 获取ip
         self.__getSUBR()        # 获取子网掩码
         self.__getGAR()         # 获取网关
+        return ip
+
+    def getSN_TX_FSR(self, socket_num):
+        '''
+        获取发送缓冲区大小
+        :param socket_num:
+        :return:
+        '''
+        global val, val1
+        val = 0
+        val1 = 0
+        while True:
+            val1 = self.IINCHIP_READ(self.SN_TX_FSR0(socket_num))
+            val1 = (val1 << 8) + self.IINCHIP_READ(self.SN_TX_FSR1(socket_num))
+            if val1 != 0:
+                val = self.IINCHIP_READ(self.SN_TX_FSR0(socket_num))
+                val = (val << 8) + self.IINCHIP_READ(self.SN_TX_FSR1(socket_num))
+            if val == val1:
+                break
+        return val
 
     def getSN_RX_RSR(self, socket_num):
         '''
@@ -324,10 +397,34 @@ class w5500(spiChat):
         self.IINCHIP_WRITE(self.SN_TX_WR0(socket_num), ((ptr & 0xff00) >> 8))
         self.IINCHIP_WRITE(self.SN_TX_WR1(socket_num), (ptr & 0x00ff))
 
+    def recv_data_processing(self, socket_num, len):
+        '''
+        此函数读取Rx读取指针寄存器,并且在从接收缓冲器复制数据之后更新Rx写入指针寄存器。
+        用户应该先读取高位字节，然后再读取低位字节，以获得正确的值。
+        :param socket_num:
+        :param buf:
+        :return:
+        '''
+        if len == 0:
+            print("CH: %d Unexpected2 length 0" % socket_num)
+            return
+
+        ptr = self.IINCHIP_READ(self.SN_RX_RD0(socket_num))
+        ptr = ((ptr & 0x00ff) << 8) + self.IINCHIP_READ(self.SN_RX_RD1(socket_num))
+
+        addrbsb = (ptr << 8) + (socket_num << 5) + 0x18
+        buf = self.__wiz_readBuff(addrbsb, len)
+
+        ptr += len
+        self.IINCHIP_WRITE(self.SN_RX_RD0(socket_num), ((ptr & 0xff00) >> 8))
+        self.IINCHIP_WRITE(self.SN_RX_RD1(socket_num), (ptr & 0x00ff))
+
+        return buf
+
 
 ''' socket 类 '''
 class mysocket(w5500):
-    def __init__(self,local_port=5000, TINCHIP_DBG=False):
+    def __init__(self, local_port=5000, quality=80, K210_DEBUG=False):
         super().__init__()
         self.local_port = local_port
         self.MAX_SOCK_NUM = 8
@@ -337,7 +434,11 @@ class mysocket(w5500):
         self.txsize = [2,2,2,2,2,2,2,2]
         self.rxsize = [2,2,2,2,2,2,2,2]
 
-        self.TINCHIP_DBG = TINCHIP_DBG
+        self.quality = quality
+        self.K210_DEBUG = K210_DEBUG
+
+        self.beforeStatus = None
+        self.outlineFlag = True
 
     @staticmethod
     def Sn_TXMEM_SIZE(ch):
@@ -455,11 +556,11 @@ class mysocket(w5500):
         for i in range(self.MAX_SOCK_NUM):
             self.__IINCHIP_WRITE(self.Sn_TXMEM_SIZE(i), self.txsize[i])
             self.__IINCHIP_WRITE(self.Sn_RXMEM_SIZE(i), self.rxsize[i])
-            if self.TINCHIP_DBG:
+            if self.K210_DEBUG:
                 print("tx_size[%d]: %d, Sn_TXMEM_SIZE = %d" % (i, self.txsize[i],
-                        self.__IINCHIP_READ(self.Sn_TXMEM_SIZE(i))[0]))
+                        self.__IINCHIP_READ(self.Sn_TXMEM_SIZE(i))))
                 print("rx_size[%d]: %d, Sn_RXMEM_SIZE = %d" % (i, self.rxsize[i],
-                        self.__IINCHIP_READ(self.Sn_RXMEM_SIZE(i))[0]))
+                        self.__IINCHIP_READ(self.Sn_RXMEM_SIZE(i))))
             self.SSIZE[i] = 0
             self.RSIZE[i] = 0
             if ssum <= self.MAX_SOCK_SIZE:  self.SSIZE[i] = self.txsize[i]*1024
@@ -575,6 +676,225 @@ class mysocket(w5500):
         :return:
         '''
         return self.SSIZE[socket_num]
+
+    def listen(self, socket_num):
+        '''
+        此功能为处于被动（服务器）模式的通道建立了连接。
+        此函数等待来自对等方的请求。
+        :param socket_num:
+        :return:
+        '''
+        if self.IINCHIP_READ(self.SN_SR(socket_num)) == self.SOCK_INIT:
+            self.IINCHIP_WRITE(self.SN_CR(socket_num), self.SN_CR_LISTEN)
+            while self.IINCHIP_READ(self.SN_CR(socket_num)):
+                pass
+            return 1
+        else:
+            return 0
+
+    def connect(self, socket_num, addr, port):
+        '''
+        此功能为处于活动（客户端）模式的通道建立了连接。
+        此功能等待，直到建立连接。
+        :param socket_num:
+        :param addr:
+        :param port:
+        :return:
+        '''
+        global ret
+        ret = 0
+        if (
+                ((addr[0] == 0xFF) and (addr[1] == 0xFF) and (addr[2] == 0xFF) and (addr[3] == 0xFF)) or
+                ((addr[0] == 0x00) and (addr[1] == 0x00) and (addr[2] == 0x00) and (addr[3] == 0x00)) or
+                (port == 0x00)
+        ):
+            ret = 0
+        else:
+            ret = 1
+            self.IINCHIP_WRITE(self.SN_DIPR0(socket_num), addr[0])
+            self.IINCHIP_WRITE(self.SN_DIPR1(socket_num), addr[1])
+            self.IINCHIP_WRITE(self.SN_DIPR2(socket_num), addr[2])
+            self.IINCHIP_WRITE(self.SN_DIPR3(socket_num), addr[3])
+            self.IINCHIP_WRITE(self.SN_DPORT0(socket_num), ((port & 0xff00) >> 8))
+            self.IINCHIP_WRITE(self.SN_DPORT1(socket_num), (port & 0x00ff))
+            self.IINCHIP_WRITE(self.SN_CR(socket_num), self.SN_CR_CONNECT)
+            while self.IINCHIP_READ(self.SN_CR(socket_num)):
+                pass
+            while (self.IINCHIP_READ(self.SN_SR(socket_num)) != self.SOCK_SYNSENT):
+                if self.IINCHIP_READ(self.SN_SR(socket_num)) == self.SOCK_ESTABLISHED:
+                    break
+                if (self.getSn_IR(socket_num) & self.SN_IR_TIMEOUT):
+                    self.IINCHIP_WRITE(self.SN_IR(socket_num), self.SN_IR_TIMEOUT)
+                    ret = 0
+                    break
+        return ret
+
+    def send(self, socket_num, buf, len):
+        '''
+        此函数用于在TCP模式下发送数据
+        :param socket_num:
+        :param buf:
+        :return:
+        '''
+        global ret
+        ret = 0
+
+        if len > self.getIINCHIP_TxMAX(socket_num):
+            ret = self.getIINCHIP_TxMAX(socket_num)
+        else:
+            ret = len
+
+        while True:
+            freesize = self.getSN_TX_FSR(socket_num)
+            status = self.IINCHIP_READ(self.SN_SR(socket_num))
+            if (status != self.SOCK_ESTABLISHED) and (status != self.SOCK_CLOSE_WAIT):
+                ret = 0
+                break
+            if freesize >= ret:
+                break
+        # copy data
+        self.send_data_processing(socket_num, buf[:len])
+        self.IINCHIP_WRITE(self.SN_CR(socket_num), self.SN_CR_SEND)
+        # wait to process the command...
+        while self.IINCHIP_READ(self.SN_CR(socket_num)):
+            pass
+        while (self.IINCHIP_READ(self.SN_IR(socket_num)) & self.SN_IR_SEND_OK) != self.SN_IR_SEND_OK:
+            status = self.IINCHIP_READ(self.SN_SR(socket_num))
+            if ((status != self.SOCK_ESTABLISHED) and (status != self.SOCK_CLOSE_WAIT)):
+                print("SEND_OK Problem!!")
+                self.close(socket_num)
+                return 0
+        self.IINCHIP_WRITE(self.SN_IR(socket_num), self.SN_IR_SEND_OK)
+        # TODO [原函数 __DEF_IINCHIP_INT__ 未知]
+        self.IINCHIP_WRITE(self.SN_IR(socket_num), self.SN_IR_SEND_OK)
+
+        return ret
+
+    def recv(self, socket_num, len):
+        '''
+        此函数是应用程序I/F函数，用于在TCP模式下接收数据。
+        它继续等待应用程序想要接收的数据。
+        :param socket_num:
+        :param buf:
+        :return:
+        '''
+        if len > 0:
+            buf = self.recv_data_processing(socket_num, len)
+            self.IINCHIP_WRITE(self.SN_CR(socket_num), self.SN_CR_RECV)
+            while self.IINCHIP_READ(self.SN_CR(socket_num)):
+                pass
+            return buf
+        else:
+            return 0
+
+    def do_tcp_server(self):
+        '''
+        tcp 服务端函数
+        :return:
+        '''
+        SOCKET_STATUS = self.getSn_SR(self.SOCK_TCPS)   # 获取 socket 状态
+        if SOCKET_STATUS == self.SOCK_CLOSED:   # 关闭状态
+            self.socket(self.SOCK_TCPS, self.SN_MR_TCP, self.local_port, self.SN_MR_ND) # 打开 SOCKET
+        elif SOCKET_STATUS == self.SOCK_INIT:   # SOCKET 已初始化
+            self.listen(self.SOCK_TCPS) # 建立监听
+        elif SOCKET_STATUS == self.SOCK_ESTABLISHED:    # SOCKET 处于链接建立状态
+            if self.getSn_IR(self.SOCK_TCPS) & self.SN_IR_CON:
+                self.setSn_IR(self.SOCK_TCPS, self.SN_IR_CON)   # 清除接收中断标志位
+            length = self.getSN_RX_RSR(self.SOCK_TCPS)  # 定义 length 为已接收数据的长度
+            if length > 0:
+                recvBuff = self.recv(self.SOCK_TCPS, length) # 接收来自 Client 的数据
+                recvBuff.append(0x00) # 添加字符串结束符
+                print("SOCKET Recv-> %s" % recvBuff[:length])
+                self.send(self.SOCK_TCPS, recvBuff, length) # 向 Client 发送数据
+        elif SOCKET_STATUS == self.SOCK_CLOSE_WAIT: # SOCKET 处于等待关闭状态
+            self.close(self.SOCK_TCPS)
+
+    def image_send(self):
+        '''
+        发送图像
+        :return:
+        '''
+        clock.tick()
+        start_time = time.ticks_cpu()   # 获取时间
+        img = sensor.snapshot()         # 拍摄一张图片
+        img = img.compress(quality=self.quality).to_bytes()     # 压缩图像
+        total_size = len(img) # 计算图像总字节
+        int_pieces = total_size // 1024
+        end_pieces = total_size % 1024
+        head_buf = str(start_time).encode() + ".".encode() + str(total_size).encode()
+        # 发送数据头
+        self.send(self.SOCK_TCPC, head_buf, len(head_buf))
+        while True:
+            ''' 等待服务端处理完成 '''
+            if (self.getSn_IR(self.SOCK_TCPC) & self.SN_IR_CON):
+                self.setSn_IR(self.SOCK_TCPC, self.SN_IR_CON)  # 清除接收中断标志位
+            length = self.getSN_RX_RSR(self.SOCK_TCPC)  # 定义 length 为已接收数据的长度
+            if length > 0:
+                recvBuff = self.recv(self.SOCK_TCPC, length)  # 接收来自 Server 的数据
+                if recvBuff.decode() == 'ok':   # 收到服务端的完成信号
+                    ''' 分包发送图像 '''
+                    # 整包
+                    for i in range(int_pieces):
+                        self.send(self.SOCK_TCPC, img[i*1024:(i+1)*1024], 1024)
+                    # 剩下的包
+                    self.send(self.SOCK_TCPC, img[int_pieces*1024:], end_pieces)
+                    break
+        while True:
+            ''' 等待服务端处理完成 '''
+            if (self.getSn_IR(self.SOCK_TCPC) & self.SN_IR_CON):
+                self.setSn_IR(self.SOCK_TCPC, self.SN_IR_CON)  # 清除接收中断标志位
+            length = self.getSN_RX_RSR(self.SOCK_TCPC)  # 定义 length 为已接收数据的长度
+            if length > 0:
+                recvBuff = self.recv(self.SOCK_TCPC, length)  # 接收来自 Server 的数据
+                if recvBuff.decode() == 'ok':  # 收到服务端的完成信号
+                    print(" [W550]@Client -> 处理时间: {} FPS: {}".format(time.ticks_cpu() - start_time, clock.fps()))
+                    break
+        # DEBUG 信息输出
+        if self.K210_DEBUG:
+            print(" [W550]@Client -> {}.{}".format(start_time, total_size))
+
+
+    def do_tcp_client(self, remote_ip, remote_port):
+        '''
+        tcp 客户端函数
+        :return:
+        '''
+        SOCKET_STATUS = self.getSn_SR(self.SOCK_TCPC)   # 获取 socket 状态
+
+        if SOCKET_STATUS == self.SOCK_CLOSED:   # socket 处于关闭状态
+            if SOCKET_STATUS != self.beforeStatus and self.outlineFlag:
+                print("-> Now Status: SOCK_CLOSED")
+            self.local_port += 1
+            self.socket(self.SOCK_TCPC, self.SN_MR_TCP, self.local_port, self.SN_MR_ND)
+        elif SOCKET_STATUS == self.SOCK_INIT:   # socket 处于初始化状态
+            if SOCKET_STATUS != self.beforeStatus and self.outlineFlag:
+                print("-> Now Status: SOCK_INIT")
+            self.connect(self.SOCK_TCPC, remote_ip, remote_port)    # socket 连接服务器
+        elif SOCKET_STATUS == self.SOCK_ESTABLISHED:    # socket 处于连接状态
+            self.outlineFlag = True
+            if SOCKET_STATUS != self.beforeStatus and self.outlineFlag:
+                print("-> Now Status: SOCK_ESTABLISHED ...... ❤")
+                print("-> Console log: {}\n".format(self.K210_DEBUG))
+            ''' 发送图像 '''
+            self.image_send()
+            ''' 发送图像 '''
+            # if (self.getSn_IR(self.SOCK_TCPC) & self.SN_IR_CON):
+            #     self.setSn_IR(self.SOCK_TCPC, self.SN_IR_CON)   #清除接收中断标志位
+            # length = self.getSN_RX_RSR(self.SOCK_TCPC)  # 定义 length 为已接收数据的长度
+            # if length > 0:
+            #     recvBuff = self.recv(self.SOCK_TCPC, length)    # 接收来自 Server 的数据
+            #     recvBuff.append(0x00)   # 添加字符串结束符
+            #     print("\nrecvBuff-> %s" % (recvBuff.decode()))
+            #     self.send(self.SOCK_TCPC, recvBuff, length) # 向 Server 发送数据
+        elif SOCKET_STATUS == self.SOCK_CLOSE_WAIT: # socket 处于等待关闭状态
+            if SOCKET_STATUS != self.beforeStatus and self.outlineFlag:
+                print("-> Now Status: SOCK_CLOSE_WAIT")
+            self.close(self.SOCK_TCPC)
+        elif SOCKET_STATUS == self.SOCK_SYNSENT:
+            if SOCKET_STATUS != self.beforeStatus and self.outlineFlag:
+                self.outlineFlag = False
+                print("-> Now Status: Server outline ...... ✖")
+        self.beforeStatus = SOCKET_STATUS   # 更新上次输出信息
 
 
 class myPing(mysocket):
@@ -730,12 +1050,28 @@ class myPing(mysocket):
             print("Unkonwn msg.")
 
 
+def ping_function(me, ping_ip):
+    '''
+    ping 功能
+    :param me:
+    :param ping_ip:
+    :return:
+    '''
+    print("------正在执行ping-----")
+    time.sleep_ms(2000)
+    me.pingCmd(0, ping_ip)
+
 
 if __name__ == '__main__':
     mac = bytearray([0x00,0x08,0xdc,0x11,0x11,0x11])    # mac 地址
     subnet = bytearray([255,255,255,0])                 # 子网掩码
     gateway = bytearray([192,168,5,1])                  # 网关
     local_ip = bytearray([192,168,5,5])                 # ip地址
+
+    remote_ip = bytearray([192, 168, 5, 20])            # 服务端ip
+    remotr_host = 5500                                  # 服务端端口
+
+    time.sleep_ms(10000)
 
     # myW5500 = w5500()
     # SOCKET = mysocket(TINCHIP_DBG=True)
@@ -744,13 +1080,32 @@ if __name__ == '__main__':
     myping.reset_w5500()
     myping.W5500_setMac(mac)
     myping.W5500_setIP(subnet, gateway, local_ip)
-    myping.W5500_getIP()
+    ip = myping.W5500_getIP()
+
+    if ip != local_ip:
+        while True:
+            time.sleep_ms(2000)
+            myping.reset_w5500()
+            myping.W5500_setMac(mac)
+            myping.W5500_setIP(subnet, gateway, local_ip)
+            ip = myping.W5500_getIP()
+            if ip == local_ip:
+                break
 
     myping.socketBuf_Init()
 
+    print('W5500 为客户端')
+    print("连接到服务端 %d.%d.%d.%d:%d" % (remote_ip[0], remote_ip[1], remote_ip[2],
+                                          remote_ip[3], remotr_host))
+
+    sensor.reset()
+    sensor.set_pixformat(sensor.RGB565)
+    sensor.set_framesize(sensor.QVGA)
+    sensor.skip_frames(time=2000)
+
+    clock = time.clock()
+
     while True:
-        print("------正在执行ping-----")
-        time.sleep_ms(2000)
-        myping.pingCmd(0, bytearray([192, 168, 5, 20]))
+        myping.do_tcp_client(remote_ip, remotr_host)
         pass
 

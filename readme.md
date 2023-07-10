@@ -58,6 +58,16 @@
 
 
 
+- 修改人：*Liu-Jiahao*
+- 时间：2023-7-10
+- 修改内容：
+  - 在 **src** 目录中添加 **Server** 和 **Client** 端
+  - 在 **Server** 中为电脑环境，需要装有 python、python-opencv 支持
+  - 在 **Client** 中为 K210 环境，运行 Maixpy
+  - 基本完成此项目，后续会进行代码优化等工作
+
+
+
 ## 五、仓库地址
 
 - GitHub: [Jiahao-Liu29/W5500_Get (github.com)](https://github.com/Jiahao-Liu29/W5500_Get)
