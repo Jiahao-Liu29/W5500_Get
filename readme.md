@@ -70,6 +70,15 @@
 
 
 
+- 修改人：*Liu-Jiahao*
+- 时间：2023-7-11
+- 修改内容：
+  - 在 **Client** 增加 **V1.0** 和 **V2.0**
+  - 完善 V2.0 的相关代码，主要是对 K210 部分的代码进行优化
+  - 书写了 **函数调用说明**
+
+
+
 ## 五、仓库地址
 
 - GitHub: [Jiahao-Liu29/W5500_Get (github.com)](https://github.com/Jiahao-Liu29/W5500_Get)
