@@ -108,6 +108,8 @@ class myWinznet5k:
 
             ret = self.get_ip()  # 获取设置信息
             if ret != self.local_ip:
+                print(debugStr + "_System: system will reset in 1 second ... ㊥")
+                time.sleep_ms(1000)
                 machine.reset()  # 系统复位
             else:
                 print(debugStr + 'Setting succeed! Start progarm ... ☯')
@@ -226,6 +228,24 @@ class myWinznet5k:
 
         return dateRecv
 
+    def getSn_SR(self, addr):
+        '''
+        获取 socket 状态
+        '''
+        return self.__device.IINCHIP_READ(self.SN_SR(addr))
+
+    def getSn_IR(self, addr):
+        '''
+        读取 socket 中断状态寄存器
+        '''
+        return  self.__device.IINCHIP_READ(self.SN_IR(addr))
+
+    def setSn_IR(self, addr, val):
+        '''
+        设置 socket 中断状态寄存器
+        '''
+        self.__device.IINCHIP_WRITE(self.SN_IR(addr), val)
+
     def reset_w5500(self):
         '''
         软件复位 w5500
@@ -290,6 +310,60 @@ class myWinznet5k:
 
         return local_ip # 返回 ip
 
+    def getSN_TX_FSR(self, socket_num):
+        '''
+        获取发送缓冲区大小
+        :param socket_num: socket 端口
+        :return: 发送缓冲区空闲部分大小
+        '''
+        global val, val1
+        val = 0
+        val1 = 0
+        while True:
+            val1 = self.__device.IINCHIP_READ(self.SN_TX_FSR0(socket_num))
+            val1 = (val1 << 8) + self.__device.IINCHIP_READ(self.SN_TX_FSR1(socket_num))
+            if val1 != 0:
+                val = self.__device.IINCHIP_READ(self.SN_TX_FSR0(socket_num))
+                val = (val << 8) + self.__device.IINCHIP_READ(self.SN_TX_FSR1(socket_num))
+            if val == val1:
+                break
+        return val
+
+    def getSN_RX_RSR(self, socket_num):
+        '''
+        给出接收缓冲区中接收数据的大小
+        :param socket_num: socket 端口
+        :return: 接收缓冲区空闲部分大小
+        '''
+        global val, val1
+        val = 0
+        val1 = 0
+        while True:
+            val1 = self.__device.IINCHIP_READ(self.SN_RX_RSR0(socket_num))
+            val1 = (val1 << 8) + self.__device.IINCHIP_READ(self.SN_RX_RSR1(socket_num))
+            if val1 != 0:
+                val = self.__device.IINCHIP_READ(self.SN_RX_RSR0(socket_num))
+                val = (val << 8) + self.__device.IINCHIP_READ(self.SN_RX_RSR1(socket_num))
+            if val == val1:
+                break
+        return val
+
+    def getIINCHIP_RxMAX(self, socket_num):
+        '''
+        此函数用于获取要发送的最大大小
+        :param socket_num:
+        :return:
+        '''
+        return self.RSIZE[socket_num]
+
+    def getIINCHIP_TxMAX(self, socket_num):
+        '''
+        此函数用于获取要接收的最大大小
+        :param socket_num:
+        :return:
+        '''
+        return self.SSIZE[socket_num]
+
     def socketBuf_Init(self):
         '''
         此功能根据使用的信道设置发送和接收缓冲区大小
@@ -310,6 +384,52 @@ class myWinznet5k:
             print(debugStr + '_debug: socketBuf Init succeed ! tx_buf & rx_buf set size:{}/{}'.
                   format(self.__device.IINCHIP_READ(self.Sn_TXMEM_SIZE(0)),
                          self.__device.IINCHIP_READ(self.Sn_RXMEM_SIZE(0))))
+
+    def send_data_processing(self, socket_num, buf):
+        '''
+        此函数读取Tx写入指针寄存器，并在复制缓冲区中的数据后更新Tx写入指示器寄存器。
+        用户应该先读取高位字节，然后再读取低位字节，以获得正确的值
+        :param socket_num: socket number
+        :param buf: data buffer to send
+        :return: None
+        '''
+        if len(buf) == 0:
+            print("CH: %d Unexpected1 length 0" % socket_num)
+            return
+
+        ptr = self.__device.IINCHIP_READ(self.SN_TX_WR0(socket_num))
+        ptr = ((ptr & 0x00ff) << 8) + self.__device.IINCHIP_READ(self.SN_TX_WR1(socket_num))
+
+        addrbsb = (ptr << 8) + (socket_num << 5) + 0x10
+        self.__device.__wiz_writeBuff(addrbsb, buf)
+
+        ptr += len(buf)
+        self.__device.IINCHIP_WRITE(self.SN_TX_WR0(socket_num), ((ptr & 0xff00) >> 8))
+        self.__device.IINCHIP_WRITE(self.SN_TX_WR1(socket_num), (ptr & 0x00ff))
+
+    def recv_data_processing(self, socket_num, length):
+        '''
+        此函数读取Rx读取指针寄存器,并且在从接收缓冲器复制数据之后更新Rx写入指针寄存器。
+        用户应该先读取高位字节，然后再读取低位字节，以获得正确的值。
+        :param socket_num: socket number
+        :param buf: data buffer to send
+        :return: 接收到的数据 bytearry
+        '''
+        if length == 0:
+            print("CH: %d Unexpected2 length 0" % socket_num)
+            return
+
+        ptr = self.__device.IINCHIP_READ(self.SN_RX_RD0(socket_num))
+        ptr = ((ptr & 0x00ff) << 8) + self.__device.IINCHIP_READ(self.SN_RX_RD1(socket_num))
+
+        addrbsb = (ptr << 8) + (socket_num << 5) + 0x18
+        buf = self.__device.__wiz_readBuff(addrbsb, length)
+
+        ptr += length
+        self.__device.IINCHIP_WRITE(self.SN_RX_RD0(socket_num), ((ptr & 0xff00) >> 8))
+        self.__device.IINCHIP_WRITE(self.SN_RX_RD1(socket_num), (ptr & 0x00ff))
+
+        return buf
 
 if __name__ == '__main__':
     # 配置信息
