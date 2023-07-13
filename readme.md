@@ -79,6 +79,21 @@
 
 
 
+- 修改人：*Liu-Jiahao*
+- 时间：2023-7-12
+- 修改内容：
+  - 完善 V2.0 的相关代码，对 myWiznet5k.py 的相关代码进行优化以及调试
+
+
+
+- 修改人：*Liu-Jiahao*
+- 时间：2023-7-13
+- 修改内容：
+  - 完善 mySocket 类中的相关函数及其实现
+  - 调试完成，可以成功传图像，目前10帧左右
+
+
+
 ## 五、仓库地址
 
 - GitHub: [Jiahao-Liu29/W5500_Get (github.com)](https://github.com/Jiahao-Liu29/W5500_Get)
