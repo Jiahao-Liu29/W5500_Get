@@ -5,9 +5,12 @@
 from myWiznet5k_spi import *
 from myWiznet5k import *
 from micropython import const
+import sensor, image
+from fpioa_manager import fm
+from Maix import GPIO
 
 class mySocket:
-    def __init__(self, spi_port, wiznet5k, local_port=5000):
+    def __init__(self, spi_port, wiznet5k, local_port=5000, img_pieces=1024, is_debug=False):
         self.__device = spi_port
         self.__wiznet5k = wiznet5k
 
@@ -25,6 +28,13 @@ class mySocket:
         self.SOCK_DNS    = const(5)
         self.SOCK_SMTP   = const(6)
         self.SOCK_NTP    = const(7)
+
+        assert img_pieces >= 0 and img_pieces <= 2048, errorStr + 'img_pieces should in 0 - 2048 '
+        self.img_pieces = img_pieces
+
+        self.__beforeStatus = None
+        self.__outlineFlag = True
+        self.__is_debug = is_debug
 
     def socket(self, socket_num, protocol, port, flag):
         '''
@@ -131,13 +141,13 @@ class mySocket:
         global ret
         ret = 0
 
-        if len > self.__device.getIINCHIP_TxMAX(socket_num):
-            ret = self.__device.getIINCHIP_TxMAX(socket_num)
+        if len > self.__wiznet5k.getIINCHIP_TxMAX(socket_num):
+            ret = self.__wiznet5k.getIINCHIP_TxMAX(socket_num)
         else:
             ret = len
 
         while True:
-            freesize = self.__device.getSN_TX_FSR(socket_num)
+            freesize = self.__wiznet5k.getSN_TX_FSR(socket_num)
             status = self.__device.IINCHIP_READ(self.__wiznet5k.SN_SR(socket_num))
             if (status != SOCK_ESTABLISHED) and (status != SOCK_CLOSE_WAIT):
                 ret = 0
@@ -153,7 +163,7 @@ class mySocket:
         while (self.__device.IINCHIP_READ(self.__wiznet5k.SN_IR(socket_num)) & SN_IR_SEND_OK) != SN_IR_SEND_OK:
             status = self.__device.IINCHIP_READ(self.__wiznet5k.SN_SR(socket_num))
             if ((status != SOCK_ESTABLISHED) and (status != SOCK_CLOSE_WAIT)):
-                print("SEND_OK Problem!!")
+                print(debugStr + "_error: SEND_OK Problem!!")
                 self.close(socket_num)
                 return 0
         self.__device.IINCHIP_WRITE(self.__wiznet5k.SN_IR(socket_num), SN_IR_SEND_OK)
@@ -257,13 +267,13 @@ class mySocket:
 
                 self.__device.IINCHIP_WRITE(self.__wiznet5k.SN_RX_RD0(socket_num), ((ptr & 0xff00) >> 8))
                 self.__device.IINCHIP_WRITE(self.__wiznet5k.SN_RX_RD1(socket_num), (ptr & 0x00ff))
-                print("socket Status: SN_MR_IPRAW")
+                print(debugStr + "socket Status: SN_MR_IPRAW")
             elif ret == SN_MR_MACRAW:
                 head = self.__device.wiz_readBuff(addrbsb, 0x02)
                 ptr += 2
                 datalen = (head[0] << 8) + head[1] - 2
                 if datalen > 1514:
-                    print("data_len over 1514")
+                    print(debugStr + "data_len over 1514")
                     while True:
                         pass
 
@@ -277,5 +287,188 @@ class mySocket:
             while (self.__device.IINCHIP_READ(self.__wiznet5k.SN_CR(socket_num))):
                 pass
 
-        print("Recv Datalen: %d" % datalen)
+        print(debugStr + "Recv Datalen: %d" % datalen)
         return [datalen, buf]
+
+    def do_tcp_server(self):
+        '''
+        tcp 服务端函数
+        :return:
+        '''
+        SOCKET_STATUS = self.__wiznet5k.getSn_SR(self.SOCK_TCPS)   # 获取 socket 状态
+        if SOCKET_STATUS == SOCK_CLOSED:   # 关闭状态
+            self.socket(self.SOCK_TCPS, SN_MR_TCP, self.local_port, SN_MR_ND) # 打开 SOCKET
+        elif SOCKET_STATUS == SOCK_INIT:   # SOCKET 已初始化
+            self.listen(self.SOCK_TCPS) # 建立监听
+        elif SOCKET_STATUS == SOCK_ESTABLISHED:    # SOCKET 处于链接建立状态
+            pass
+            # if self.__wiznet5k.getSn_IR(self.SOCK_TCPS) & SN_IR_CON:
+            #     self.__wiznet5k.setSn_IR(self.SOCK_TCPS, SN_IR_CON)   # 清除接收中断标志位
+            # length = self.__wiznet5k.getSN_RX_RSR(self.SOCK_TCPS)  # 定义 length 为已接收数据的长度
+            # if length > 0:
+            #     recvBuff = self.recv(self.SOCK_TCPS, length) # 接收来自 Client 的数据
+            #     recvBuff.append(0x00) # 添加字符串结束符
+            #     print("SOCKET Recv-> %s" % recvBuff[:length])
+            #     self.send(self.SOCK_TCPS, recvBuff, length) # 向 Client 发送数据
+        elif SOCKET_STATUS == SOCK_CLOSE_WAIT: # SOCKET 处于等待关闭状态
+            self.close(self.SOCK_TCPS)
+
+        return SOCKET_STATUS
+
+    def do_tcp_client(self, remote_ip, remote_port):
+        '''
+        tcp 客户端函数
+        :return:
+        '''
+        SOCKET_STATUS = self.__wiznet5k.getSn_SR(self.SOCK_TCPC)  # 获取 socket 状态
+
+        if SOCKET_STATUS == SOCK_CLOSED:  # socket 处于关闭状态
+            if SOCKET_STATUS != self.__beforeStatus and self.__outlineFlag:
+                print(debugStr + "_status: Now Status: SOCK_CLOSED")
+            self.local_port += 1
+            self.socket(self.SOCK_TCPC, SN_MR_TCP, self.local_port, SN_MR_ND)
+        elif SOCKET_STATUS == SOCK_INIT:  # socket 处于初始化状态
+            if SOCKET_STATUS != self.__beforeStatus and self.__outlineFlag:
+                print(debugStr + "_status: Now Status: SOCK_INIT")
+            self.connect(self.SOCK_TCPC, remote_ip, remote_port)  # socket 连接服务器
+        elif SOCKET_STATUS == SOCK_ESTABLISHED:  # socket 处于连接状态
+            self.__outlineFlag = True
+            if SOCKET_STATUS != self.__beforeStatus and self.__outlineFlag:
+                print(debugStr + "_status: Now Status: SOCK_ESTABLISHED ...... ❤")
+                print(debugStr + "_status: Console log: {}\n".format(self.__is_debug))
+            ''' 发送图像 '''
+            # self.image_send()
+            ''' 发送图像 '''
+            # if (self.getSn_IR(self.SOCK_TCPC) & self.SN_IR_CON):
+            #     self.setSn_IR(self.SOCK_TCPC, self.SN_IR_CON)   #清除接收中断标志位
+            # length = self.getSN_RX_RSR(self.SOCK_TCPC)  # 定义 length 为已接收数据的长度
+            # if length > 0:
+            #     recvBuff = self.recv(self.SOCK_TCPC, length)    # 接收来自 Server 的数据
+            #     recvBuff.append(0x00)   # 添加字符串结束符
+            #     print("\nrecvBuff-> %s" % (recvBuff.decode()))
+            #     self.send(self.SOCK_TCPC, recvBuff, length) # 向 Server 发送数据
+        elif SOCKET_STATUS == SOCK_CLOSE_WAIT:  # socket 处于等待关闭状态
+            if SOCKET_STATUS != self.__beforeStatus and self.__outlineFlag:
+                print(debugStr + "_status: Now Status: SOCK_CLOSE_WAIT")
+            self.close(self.SOCK_TCPC)
+        elif SOCKET_STATUS == SOCK_SYNSENT:
+            if SOCKET_STATUS != self.__beforeStatus and self.__outlineFlag:
+                self.__outlineFlag = False
+                print(debugStr + "_status: Now Status: Server outline ...... ✖")
+        self.__beforeStatus = SOCKET_STATUS  # 更新上次输出信息
+
+        return SOCKET_STATUS
+
+    def image_send(self, quality=80):
+        '''
+        通过 tcp 发送图像
+        '''
+        start_time = time.ticks()   # 获取时间
+        img = sensor.snapshot()         # 拍摄一张图片
+        img = img.compress(quality=quality).to_bytes()     # 压缩图像
+        total_size = len(img) # 计算图像总字节
+        int_pieces = total_size // self.img_pieces
+        end_pieces = total_size % self.img_pieces
+        head_buf = str(start_time).encode() + ".".encode() + str(total_size).encode()
+        # 发送数据头
+        self.send(self.SOCK_TCPC, head_buf, len(head_buf))
+        while True:
+            ''' 等待服务端处理完成 '''
+            if (self.__wiznet5k.getSn_IR(self.SOCK_TCPC) & SN_IR_CON):
+                self.__wiznet5k.setSn_IR(self.SOCK_TCPC, SN_IR_CON)  # 清除接收中断标志位
+            length = self.__wiznet5k.getSN_RX_RSR(self.SOCK_TCPC)  # 定义 length 为已接收数据的长度
+            if length > 0:
+                recvBuff = self.recv(self.SOCK_TCPC, length)  # 接收来自 Server 的数据
+                if recvBuff.decode() == 'ok':   # 收到服务端的完成信号
+                    ''' 分包发送图像 '''
+                    # 整包
+                    for i in range(int_pieces):
+                        self.send(self.SOCK_TCPC, img[i*self.img_pieces:(i+1)*self.img_pieces], self.img_pieces)
+                    # 剩下的包
+                    self.send(self.SOCK_TCPC, img[int_pieces*self.img_pieces:], end_pieces)
+                    break
+        while True:
+            ''' 等待服务端处理完成 '''
+            if (self.__wiznet5k.getSn_IR(self.SOCK_TCPC) & SN_IR_CON):
+                self.__wiznet5k.setSn_IR(self.SOCK_TCPC, SN_IR_CON)  # 清除接收中断标志位
+            length = self.__wiznet5k.getSN_RX_RSR(self.SOCK_TCPC)  # 定义 length 为已接收数据的长度
+            if length > 0:
+                recvBuff = self.recv(self.SOCK_TCPC, length)  # 接收来自 Server 的数据
+                if recvBuff.decode() == 'ok':  # 收到服务端的完成信号
+                    deltime = time.ticks() - start_time
+                    print(debugStr + "处理时间: {} ms FPS: {:.2f}".format(deltime, (1/deltime)*1000))
+                    break
+        # DEBUG 信息输出
+        if self.__is_debug:
+            print(debugStr + "{}.{}".format(start_time, total_size))
+
+    def do_udp(self, remote_ip, remote_port):
+        '''
+        udp 接收服务函数
+        '''
+        SOCKET_STATUS = self.__wiznet5k.getSn_SR(self.SOCK_UDPS)    # 获取 SOKCET 状态
+
+        if SOCKET_STATUS == SOCK_CLOSED:    # SOCKET 处于关闭状态
+            self.socket(self.SOCK_UDPS, SN_MR_UDP, self.local_port, 0)   # 初始化 SOCKET
+        elif SOCKET_STATUS == SOCK_UDP:     # SOCKET 初始化完成
+            time.sleep_ms(10)
+            if self.__wiznet5k.getSn_IR(self.SOCK_UDPS) & SN_IR_RECV:
+                # 清除接收中断
+                self.__wiznet5k.setSn_IR(self.SOCK_UDPS, SN_IR_RECV)
+            length = self.__wiznet5k.getSN_RX_RSR(self.SOCK_UDPS)   # 接收到数据
+            if length > 0:
+                recvBuf = self.recvfrom(self.SOCK_UDPS, length, remote_ip, remote_port) # 接收发送过来的数据
+                recvBuf[length - 8] = 0x00  # 添加字符串结束符
+                print(debugStr + "SOCKET Recv-> %s" % recvBuf[:length])
+                self.sendto(self.SOCK_UDPS, recvBuf[:length - 8], remote_ip, remote_port)
+
+        return SOCKET_STATUS
+
+if __name__ == '__main__':
+    # 配置信息
+    config = (
+        bytearray([0x00, 0x08, 0xdc, 0x11, 0x11, 0x11]),  # mac 地址
+        bytearray([192, 168, 5, 5]),  # ip地址
+        bytearray([255, 255, 255, 0]),  # 子网掩码
+        bytearray([192, 168, 5, 1])  # 网关
+    )
+
+    remote_ip = bytearray([192, 168, 5, 20])  # 服务端ip
+    remote_port = 5500  # 服务端端口
+
+    # reset 脚
+    fm.register(31, fm.fpioa.GPIOHS11, force=True)  # reset
+    reset = GPIO(GPIO.GPIOHS11, GPIO.OUT)  # reset 脚
+    reset.value(1)
+
+    # 初始化 mySpi 类
+    spi = mySpi(1)
+
+    # 延时，等待稳定
+    for i in range(1, 11):
+        print(debugStr + 'wait for start ....... have {} second!'.format(10 - i))
+        time.sleep_ms(1000)
+
+    time.sleep_ms(1000)
+    # w5500 初始化
+    w5500 = myWiznet5k(spi, config=config, reset_pin=reset, is_debug=True)
+
+    # 初始化 socket
+    socket = mySocket(spi, w5500, img_pieces=2040)
+
+    print(debugStr + ' W5500 为客户端')
+    print(debugStr + "连接到服务端 %d.%d.%d.%d:%d" % (remote_ip[0], remote_ip[1], remote_ip[2],
+                                          remote_ip[3], remote_port))
+
+    # 摄像头初始化
+    sensor.reset()
+    sensor.set_pixformat(sensor.RGB565)
+    sensor.set_framesize(sensor.QVGA)
+    sensor.skip_frames(time=2000)
+
+    clock = time.clock()
+
+    while True:
+        SOCK_STATUS = socket.do_tcp_client(remote_ip, remote_port)
+        if SOCK_STATUS == SOCK_ESTABLISHED:
+            socket.image_send()

@@ -36,20 +36,22 @@ SN_CR_RECV    = const(0x40)     # update rxbuf pointer, recv data
 ''' SN_IR value '''
 SN_IR_SEND_OK = const(0x10)     # complete sending
 SN_IR_TIMEOUT = const(0x08)     # assert timeout
+SN_IR_RECV    = const(0x04)     # receiving data
 SN_IR_CON     = const(0x01)     # established connection
 
 ''' SN_SR values '''
-SOCKET_CLOSED    = const(0x00)  # closed
+SOCK_CLOSED      = const(0x00)  # closed
 SOCK_INIT        = const(0x13)  # init state
 SOCK_SYNSENT     = const(0x15)  # connection state
 SOCK_ESTABLISHED = const(0x17)  # success to connect
 SOCK_CLOSE_WAIT  = const(0x1C)  # closing state
+SOCK_UDP         = const(0x22)  # udp socket
 SOCK_IPRAW       = const(0x32)  # ip raw mode socket
 
 ''' IP PROTOCOL '''
 IPPROTO_ICMP = const(1)         # Control message protocol
 
-class myWinznet5k:
+class myWiznet5k:
     '''
     W5500 对象
     '''
@@ -401,7 +403,7 @@ class myWinznet5k:
         ptr = ((ptr & 0x00ff) << 8) + self.__device.IINCHIP_READ(self.SN_TX_WR1(socket_num))
 
         addrbsb = (ptr << 8) + (socket_num << 5) + 0x10
-        self.__device.__wiz_writeBuff(addrbsb, buf)
+        self.__device.wiz_writeBuff(addrbsb, buf)
 
         ptr += len(buf)
         self.__device.IINCHIP_WRITE(self.SN_TX_WR0(socket_num), ((ptr & 0xff00) >> 8))
@@ -423,7 +425,7 @@ class myWinznet5k:
         ptr = ((ptr & 0x00ff) << 8) + self.__device.IINCHIP_READ(self.SN_RX_RD1(socket_num))
 
         addrbsb = (ptr << 8) + (socket_num << 5) + 0x18
-        buf = self.__device.__wiz_readBuff(addrbsb, length)
+        buf = self.__device.wiz_readBuff(addrbsb, length)
 
         ptr += length
         self.__device.IINCHIP_WRITE(self.SN_RX_RD0(socket_num), ((ptr & 0xff00) >> 8))
@@ -455,4 +457,4 @@ if __name__ == '__main__':
 
     time.sleep_ms(1000)
     # w5500 初始化
-    w5500 = myWinznet5k(spi, config=config, reset_pin=reset, is_debug=True)
+    w5500 = myWiznet5k(spi, config=config, reset_pin=reset, is_debug=True)
