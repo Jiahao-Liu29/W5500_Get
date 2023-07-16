@@ -363,6 +363,10 @@ class mySocket:
         '''
         通过 tcp 发送图像
         '''
+        global deltime, fps
+        deltime = None
+        fps = None
+
         start_time = time.ticks()   # 获取时间
         img = sensor.snapshot()         # 拍摄一张图片
         img = img.compress(quality=quality).to_bytes()     # 压缩图像
@@ -396,11 +400,14 @@ class mySocket:
                 recvBuff = self.recv(self.SOCK_TCPC, length)  # 接收来自 Server 的数据
                 if recvBuff.decode() == 'ok':  # 收到服务端的完成信号
                     deltime = time.ticks() - start_time
-                    print(debugStr + "处理时间: {} ms FPS: {:.2f}".format(deltime, (1/deltime)*1000))
+                    fps =  (1 / deltime)*1000
+                    print(debugStr + "处理时间: {} ms FPS: {:.2f}".format(deltime, fps))
                     break
         # DEBUG 信息输出
         if self.__is_debug:
             print(debugStr + "{}.{}".format(start_time, total_size))
+
+        return (img, deltime, fps)
 
     def do_udp(self, remote_ip, remote_port):
         '''

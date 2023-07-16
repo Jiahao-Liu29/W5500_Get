@@ -60,6 +60,11 @@ class myWiznet5k:
         self.__device = spi_port    # spi 对象
         self.__reset = reset_pin    # 复位脚
 
+        ''' 外部常量 '''
+        self.getIp = None   # 得到的 ip
+        self.getSubnet = None   # 得到的子网掩码
+        self.getGateway = None  # 得到的网关
+
         if mac is not None and local_ip is not None and subnet is not None and gateway is not None:
             self.mac = mac
             self.local_ip = local_ip
@@ -227,6 +232,17 @@ class myWiznet5k:
         time.sleep_ms(1)
         dateRecv = self.__device.wiz_readBuff(addr, 4)
         print(debugStr + '%s: %d.%d.%d.%d' % (str, dateRecv[0], dateRecv[1], dateRecv[2], dateRecv[3]))
+
+        string = str(dateRecv[0])+'.'+str(dateRecv[1])+'.'+str(dateRecv[2])+'.'+str(dateRecv[3])
+        if addr == SIPR0:
+            # 获取 ip 地址
+            self.getIp = string
+        elif addr == SUBR0:
+            # 获取 子网掩码
+            self.getSubnet = string
+        elif addr == GAR0:
+            # 获取 网关
+            self.getGateway = string
 
         return dateRecv
 
